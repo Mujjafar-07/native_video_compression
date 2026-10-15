@@ -54,7 +54,13 @@ class _MyAppState extends State<MyApp> {
     });
 
     try {
-      final result = await NativeVideoCompression.compress(path: source.path, targetPath: target);
+      final result = await NativeVideoCompression.compress(
+        path: source.path,
+        targetPath: target,
+        // Raised so large test clips exercise the transcode + output-size guard
+        // instead of being rejected by the default 500 MB cap.
+        maxInputBytes: 4 * 1024 * 1024 * 1024,
+      );
       sw.stop();
       final outMb = await result.file.length() / (1024 * 1024);
       setState(() {

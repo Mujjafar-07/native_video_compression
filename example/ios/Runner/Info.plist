@@ -14,6 +14,12 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>native_video_compression_example</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Pick a video to test native compression.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Record a video to test native compression.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Capture audio when recording a test video.</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

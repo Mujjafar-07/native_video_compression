@@ -62,6 +62,7 @@ class VideoCompressionError {
   static const compressFailed = 'COMPRESS_FAILED';
   static const cancelled = 'CANCELLED';
   static const unsupportedFormat = 'UNSUPPORTED_FORMAT';
+  static const inputTooLarge = 'INPUT_TOO_LARGE';
 }
 
 /// Thrown when native compression fails. [code] is one of

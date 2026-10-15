@@ -23,12 +23,14 @@ final class VideoCompressor {
     enum CompressError: Error {
         case probeFailed
         case unsupportedFormat(String)
+        case inputTooLarge(String)
         case cancelled
         case failed(String)
     }
 
     private static let maxLongEdge = 1280
     private static let skipMaxBitrate: Double = 2_500_000
+    private static let maxInputBytes: Int64 = 500 * 1024 * 1024 // sanity cap
 
     // Containers AVFoundation cannot decode on iOS. Checked before probe.
     private static let unsupportedExt: Set<String> =
@@ -54,12 +56,14 @@ final class VideoCompressor {
         targetPath: String,
         trimStartMs: Int64?,
         trimEndMs: Int64?,
+        maxInputBytes: Int64? = nil,
         completion: @escaping (Result<[String: Any], Error>) -> Void
     ) {
         workerQueue.async {
             self.busy = true
             self.runJob(path: path, targetPath: targetPath,
                         trimStartMs: trimStartMs, trimEndMs: trimEndMs,
+                        maxInputBytes: maxInputBytes ?? Self.maxInputBytes,
                         completion: completion)
         }
     }
@@ -81,6 +85,7 @@ final class VideoCompressor {
         targetPath: String,
         trimStartMs: Int64?,
         trimEndMs: Int64?,
+        maxInputBytes: Int64,
         completion: @escaping (Result<[String: Any], Error>) -> Void
     ) {
         let inputURL = URL(fileURLWithPath: path)
@@ -95,6 +100,15 @@ final class VideoCompressor {
             finish(completion, .failure(CompressError.unsupportedFormat("Unsupported container: .\(ext)")))
             return
         }
+
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        let srcBytes = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        if srcBytes > maxInputBytes {
+            busy = false
+            finish(completion, .failure(CompressError.inputTooLarge("Input exceeds \(maxInputBytes / (1024 * 1024)) MB")))
+            return
+        }
+
         guard let probe = probeVideo(url: inputURL) else {
             finish(completion, .failure(CompressError.probeFailed))
             return
@@ -153,6 +167,21 @@ final class VideoCompressor {
 
                 switch status {
                 case .completed:
+                    // Output-size guard: if the transcode is not smaller than the
+                    // source, discard it and return the original (valid MP4 only),
+                    // so we never hand back a file larger than the input.
+                    let outAttrs = try? FileManager.default.attributesOfItem(atPath: targetPath)
+                    let outBytes = (outAttrs?[.size] as? NSNumber)?.int64Value ?? 0
+                    if outBytes >= srcBytes, srcBytes > 0, ext == "mp4" || ext == "m4v" {
+                        try? FileManager.default.removeItem(at: outputURL)
+                        let copied = (try? FileManager.default.copyItem(at: inputURL, to: outputURL)) != nil
+                        let map = self.resultMap(
+                            targetPath, probe.displayWidth, probe.displayHeight,
+                            probe.durationMs, copied ? "copied" : "transcoded")
+                        self.finish(completion, .success(map))
+                        return
+                    }
+
                     let out = self.probeVideo(url: outputURL)
                     let map = self.resultMap(
                         targetPath,

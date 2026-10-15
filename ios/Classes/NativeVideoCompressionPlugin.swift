@@ -41,10 +41,12 @@ public class NativeVideoCompressionPlugin: NSObject, FlutterPlugin, FlutterStrea
             }
             let trimStartMs = (args["trimStartMs"] as? NSNumber)?.int64Value
             let trimEndMs = (args["trimEndMs"] as? NSNumber)?.int64Value
+            let maxInputBytes = (args["maxInputBytes"] as? NSNumber)?.int64Value
 
             compressor.onProgress = { [weak self] p in self?.progressSink?(p) }
             compressor.compress(path: path, targetPath: targetPath,
-                                trimStartMs: trimStartMs, trimEndMs: trimEndMs) { outcome in
+                                trimStartMs: trimStartMs, trimEndMs: trimEndMs,
+                                maxInputBytes: maxInputBytes) { outcome in
                 switch outcome {
                 case .success(let map):
                     result(map)
@@ -68,6 +70,8 @@ public class NativeVideoCompressionPlugin: NSObject, FlutterPlugin, FlutterStrea
                 return FlutterError(code: "PROBE_FAILED", message: "Could not read video metadata", details: nil)
             case .unsupportedFormat(let msg):
                 return FlutterError(code: "UNSUPPORTED_FORMAT", message: msg, details: nil)
+            case .inputTooLarge(let msg):
+                return FlutterError(code: "INPUT_TOO_LARGE", message: msg, details: nil)
             case .cancelled:
                 return FlutterError(code: "CANCELLED", message: "Compression cancelled", details: nil)
             case .failed(let msg):

@@ -32,6 +32,9 @@ class VideoCompressCancelled : Exception("cancelled")
 /** Raised when the source container cannot be handled on this platform. */
 class UnsupportedFormat(message: String) : Exception(message)
 
+/** Raised when the input exceeds the sanity size cap. */
+class InputTooLarge(message: String) : Exception(message)
+
 /**
  * Native video compressor using Media3 Transformer.
  *
@@ -52,6 +55,8 @@ class VideoCompressor(private val appContext: Context) {
         private const val BITRATE_DEFAULT = 2_000_000
         private const val BITRATE_HIGH_FPS = 2_750_000 // sources above 40 fps
         private const val SKIP_MAX_BITRATE = 2_500_000
+        private const val MIN_VIDEO_BITRATE = 150_000 // never request below this
+        private const val MAX_INPUT_BYTES = 500L * 1024 * 1024 // sanity cap
         private const val PROGRESS_INTERVAL_MS = 250L
 
         // Containers Media3 cannot reliably read. Checked before probe so the
@@ -95,10 +100,16 @@ class VideoCompressor(private val appContext: Context) {
         targetPath: String,
         trimStartMs: Long?,
         trimEndMs: Long?,
+        maxInputBytes: Long? = null,
+        minVideoBitrate: Int? = null,
         onDone: (Result<Map<String, Any>>) -> Unit,
     ) {
         isBusy = true
-        workerHandler.post { runJob(path, targetPath, trimStartMs, trimEndMs, onDone) }
+        val maxInput = maxInputBytes ?: MAX_INPUT_BYTES
+        val minBitrate = minVideoBitrate ?: MIN_VIDEO_BITRATE
+        workerHandler.post {
+            runJob(path, targetPath, trimStartMs, trimEndMs, maxInput, minBitrate, onDone)
+        }
     }
 
     /** Cancels the active job. [compress]'s callback then fails with cancelled. */
@@ -135,11 +146,19 @@ class VideoCompressor(private val appContext: Context) {
         targetPath: String,
         trimStartMs: Long?,
         trimEndMs: Long?,
+        maxInputBytes: Long,
+        minVideoBitrate: Int,
         onDone: (Result<Map<String, Any>>) -> Unit,
     ) {
         val ext = path.substringAfterLast('.', "").lowercase()
         if (ext in UNSUPPORTED_EXT) {
             finish(onDone, Result.failure(UnsupportedFormat("Unsupported container: .$ext")))
+            return
+        }
+
+        val inputBytes = File(path).length()
+        if (inputBytes > maxInputBytes) {
+            finish(onDone, Result.failure(InputTooLarge("Input exceeds ${maxInputBytes / (1024 * 1024)} MB")))
             return
         }
 
@@ -192,7 +211,14 @@ class VideoCompressor(private val appContext: Context) {
             .setEffects(Effects(listOf(), listOf(Presentation.createForHeight(targetDisplayHeight))))
             .build()
 
-        val videoBitrate = if (probe.fps > 40f) BITRATE_HIGH_FPS else BITRATE_DEFAULT
+        // Bitrate must be a CEILING, never a floor: a source already below our
+        // target must not be re-encoded upward. Cap the request at the source's
+        // overall bitrate (a safe upper bound), with a sane minimum.
+        val targetBitrate = if (probe.fps > 40f) BITRATE_HIGH_FPS else BITRATE_DEFAULT
+        val videoBitrate = when {
+            probe.bitrate in 1 until targetBitrate -> max(minVideoBitrate, probe.bitrate)
+            else -> targetBitrate
+        }
         val encoderFactory = DefaultEncoderFactory.Builder(appContext)
             .setRequestedVideoEncoderSettings(
                 VideoEncoderSettings.Builder().setBitrate(videoBitrate).build()
@@ -208,6 +234,29 @@ class VideoCompressor(private val appContext: Context) {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                     val done = pendingDone
                     clearState()
+
+                    // Output-size guard: if the transcode produced a file that is
+                    // NOT smaller than the source, compression failed its purpose.
+                    // When the source is a valid MP4 container, discard the output
+                    // and return the original (byte-copy) so we never hand back a
+                    // file larger than the input.
+                    val outputBytes = File(targetPath).length()
+                    if (outputBytes >= inputBytes && inputBytes > 0 &&
+                        (ext == "mp4" || ext == "m4v")
+                    ) {
+                        File(targetPath).delete()
+                        val copied = runCatching {
+                            File(path).copyTo(File(targetPath), overwrite = true)
+                        }.isSuccess
+                        val map = if (copied) {
+                            resultMap(targetPath, probe.displayWidth, probe.displayHeight, probe.durationMs, "copied")
+                        } else {
+                            resultMap(targetPath, probe.displayWidth, probe.displayHeight, probe.durationMs, "transcoded")
+                        }
+                        finish(done, Result.success(map))
+                        return
+                    }
+
                     val out = probe(targetPath) // re-probe output for exact metadata
                     val map = if (out != null) {
                         resultMap(targetPath, out.displayWidth, out.displayHeight, out.durationMs, "transcoded")

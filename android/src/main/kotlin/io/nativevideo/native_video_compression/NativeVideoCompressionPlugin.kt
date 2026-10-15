@@ -60,9 +60,15 @@ class NativeVideoCompressionPlugin :
                 }
                 val trimStart = (call.argument<Any>("trimStartMs") as? Number)?.toLong()
                 val trimEnd = (call.argument<Any>("trimEndMs") as? Number)?.toLong()
+                val maxInputBytes = (call.argument<Any>("maxInputBytes") as? Number)?.toLong()
+                val minVideoBitrate = (call.argument<Any>("minVideoBitrate") as? Number)?.toInt()
 
                 comp.onProgress = { p -> progressSink?.success(p) }
-                comp.compress(path, targetPath, trimStart, trimEnd) { r ->
+                comp.compress(
+                    path, targetPath, trimStart, trimEnd,
+                    maxInputBytes = maxInputBytes,
+                    minVideoBitrate = minVideoBitrate,
+                ) { r ->
                     r.fold(
                         onSuccess = { map -> result.success(map) },
                         onFailure = { e ->
@@ -71,6 +77,8 @@ class NativeVideoCompressionPlugin :
                                     result.error("CANCELLED", "Compression cancelled", null)
                                 e is UnsupportedFormat ->
                                     result.error("UNSUPPORTED_FORMAT", e.message, null)
+                                e is InputTooLarge ->
+                                    result.error("INPUT_TOO_LARGE", e.message, null)
                                 e.message?.startsWith("PROBE_FAILED") == true ->
                                     result.error("PROBE_FAILED", "Could not read video metadata", null)
                                 else ->

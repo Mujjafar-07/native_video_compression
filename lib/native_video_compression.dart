@@ -40,11 +40,18 @@ class NativeVideoCompression {
   /// Throws [VideoCompressionException] on failure (e.g. [VideoCompressionError]
   /// `BUSY`, `UNSUPPORTED_FORMAT`, `CANCELLED`, `PROBE_FAILED`,
   /// `COMPRESS_FAILED`). Only one job runs at a time.
+  /// [maxInputBytes] rejects inputs larger than this with `INPUT_TOO_LARGE`
+  /// (default 500 MB). [minVideoBitrate] is the floor for the encode bitrate
+  /// ceiling — the request is never driven below it (default 150 kbps,
+  /// Android only; iOS bitrate is preset-owned). Both default to the package
+  /// values when omitted.
   static Future<VideoCompressionResult> compress({
     required String path,
     required String targetPath,
     int? trimStartMs,
     int? trimEndMs,
+    int? maxInputBytes,
+    int? minVideoBitrate,
   }) async {
     try {
       final result = await _methods.invokeMethod<Map<dynamic, dynamic>>(
@@ -54,6 +61,8 @@ class NativeVideoCompression {
           'targetPath': targetPath,
           'trimStartMs': ?trimStartMs,
           'trimEndMs': ?trimEndMs,
+          'maxInputBytes': ?maxInputBytes,
+          'minVideoBitrate': ?minVideoBitrate,
         },
       );
       if (result == null) {
