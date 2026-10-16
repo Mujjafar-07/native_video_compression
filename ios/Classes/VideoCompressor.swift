@@ -18,6 +18,9 @@ final class VideoCompressor {
         let bitrate: Double // bits/sec, video track
         let fps: Float
         let isH264OrHevc: Bool
+        // true only for H.264/AVC. HEVC is NOT byte-copyable: many receivers
+        // (Android, web) can't decode it, so HEVC must always be transcoded.
+        let isH264: Bool
     }
 
     enum CompressError: Error {
@@ -118,8 +121,9 @@ final class VideoCompressor {
         let longEdge = max(probe.displayWidth, probe.displayHeight)
         let containerOk = ext == "mp4" || ext == "m4v"
 
-        // Skip: already compliant, no trim -> byte-copy.
-        if !hasTrim && probe.isH264OrHevc && longEdge <= Self.maxLongEdge
+        // Skip: already compliant, no trim -> byte-copy. H.264 only — HEVC is
+        // never byte-copied, so a cross-platform-safe H.264 is always produced.
+        if !hasTrim && probe.isH264 && longEdge <= Self.maxLongEdge
             && probe.bitrate > 0 && probe.bitrate <= Self.skipMaxBitrate && containerOk {
             do {
                 try? FileManager.default.removeItem(at: outputURL)
@@ -168,11 +172,15 @@ final class VideoCompressor {
                 switch status {
                 case .completed:
                     // Output-size guard: if the transcode is not smaller than the
-                    // source, discard it and return the original (valid MP4 only),
-                    // so we never hand back a file larger than the input.
+                    // source, discard it and return the original, so we never hand
+                    // back a file larger than the input. Only when the original is
+                    // H.264 in an MP4 container — never revert to an HEVC source, or
+                    // receivers that can't decode HEVC would get an unplayable file
+                    // (H.264 is less space-efficient than HEVC, so the transcode of
+                    // an HEVC source can be larger yet is the only playable option).
                     let outAttrs = try? FileManager.default.attributesOfItem(atPath: targetPath)
                     let outBytes = (outAttrs?[.size] as? NSNumber)?.int64Value ?? 0
-                    if outBytes >= srcBytes, srcBytes > 0, ext == "mp4" || ext == "m4v" {
+                    if outBytes >= srcBytes, srcBytes > 0, probe.isH264, ext == "mp4" || ext == "m4v" {
                         try? FileManager.default.removeItem(at: outputURL)
                         let copied = (try? FileManager.default.copyItem(at: inputURL, to: outputURL)) != nil
                         let map = self.resultMap(
@@ -240,9 +248,11 @@ final class VideoCompressor {
         guard w > 0, h > 0 else { return nil }
 
         var codecOk = false
+        var isH264 = false
         if let descAny = track.formatDescriptions.first {
             let desc = descAny as! CMFormatDescription
             let sub = CMFormatDescriptionGetMediaSubType(desc)
+            isH264 = (sub == kCMVideoCodecType_H264)
             codecOk = (sub == kCMVideoCodecType_H264 || sub == kCMVideoCodecType_HEVC)
         }
         return Probe(
@@ -251,7 +261,8 @@ final class VideoCompressor {
             durationMs: Int(CMTimeGetSeconds(asset.duration) * 1000.0),
             bitrate: Double(track.estimatedDataRate),
             fps: track.nominalFrameRate,
-            isH264OrHevc: codecOk
+            isH264OrHevc: codecOk,
+            isH264: isH264
         )
     }
 

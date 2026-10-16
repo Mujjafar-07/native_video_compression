@@ -89,6 +89,9 @@ class VideoCompressor(private val appContext: Context) {
         val bitrate: Int,
         val fps: Float,
         val isH264OrHevc: Boolean,
+        // true only for H.264/AVC. HEVC is NOT byte-copyable: many receivers
+        // (other Android devices, web) can't decode it, so HEVC must always be transcoded.
+        val isH264: Boolean,
     )
 
     /**
@@ -172,8 +175,10 @@ class VideoCompressor(private val appContext: Context) {
         val longEdge = max(probe.displayWidth, probe.displayHeight)
         val containerOk = ext == "mp4" || ext == "m4v"
 
-        // Skip: already compliant and no trim -> byte-copy (near-instant).
-        if (!hasTrim && probe.isH264OrHevc && longEdge <= MAX_LONG_EDGE &&
+        // Skip: already compliant and no trim -> byte-copy (near-instant). H.264
+        // only — HEVC is never byte-copied, so a cross-platform-safe H.264 is
+        // always produced (many receivers can't decode HEVC).
+        if (!hasTrim && probe.isH264 && longEdge <= MAX_LONG_EDGE &&
             probe.bitrate in 1..SKIP_MAX_BITRATE && containerOk
         ) {
             val copied = runCatching {
@@ -236,12 +241,14 @@ class VideoCompressor(private val appContext: Context) {
                     clearState()
 
                     // Output-size guard: if the transcode produced a file that is
-                    // NOT smaller than the source, compression failed its purpose.
-                    // When the source is a valid MP4 container, discard the output
-                    // and return the original (byte-copy) so we never hand back a
-                    // file larger than the input.
+                    // NOT smaller than the source, compression failed its purpose, so
+                    // discard the output and return the original. Only when the
+                    // original is H.264 in an MP4 container — never revert to an HEVC
+                    // source, or receivers that can't decode HEVC get an unplayable
+                    // file (H.264 is less space-efficient than HEVC, so the transcode
+                    // of an HEVC source can be larger yet is the only playable option).
                     val outputBytes = File(targetPath).length()
-                    if (outputBytes >= inputBytes && inputBytes > 0 &&
+                    if (outputBytes >= inputBytes && inputBytes > 0 && probe.isH264 &&
                         (ext == "mp4" || ext == "m4v")
                     ) {
                         File(targetPath).delete()
@@ -373,6 +380,7 @@ class VideoCompressor(private val appContext: Context) {
                 bitrate = bitrate,
                 fps = captureFps ?: (if (formatFps > 0f) formatFps else 30f),
                 isH264OrHevc = mime == MediaFormat.MIMETYPE_VIDEO_AVC || mime == MediaFormat.MIMETYPE_VIDEO_HEVC,
+                isH264 = mime == MediaFormat.MIMETYPE_VIDEO_AVC,
             )
         } catch (e: Exception) {
             Log.e(TAG, "probe failed", e)
